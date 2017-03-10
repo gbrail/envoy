@@ -21,7 +21,7 @@ ProxyFilter::~ProxyFilter() { ASSERT(pending_requests_.empty()); }
 void ProxyFilter::onRespValue(RespValuePtr&& value) {
   pending_requests_.emplace_back(*this);
   PendingRequest& request = pending_requests_.back();
-  request.request_handle_ = conn_pool_.makeRequest("", *value, request);
+  request.request_handle_ = splitter_.makeRequest(*value, request);
   if (!request.request_handle_) {
     respondWithFailure("no healthy upstream");
     pending_requests_.pop_back();

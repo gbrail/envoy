@@ -100,5 +100,7 @@ public:
                                      ActiveRequestCallbacks& callbacks) PURE;
 };
 
+typedef std::unique_ptr<Instance> InstancePtr;
+
 } // ConnPool
 } // Redis

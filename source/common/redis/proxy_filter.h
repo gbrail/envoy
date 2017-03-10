@@ -2,7 +2,8 @@
 
 #include "envoy/network/filter.h"
 #include "envoy/redis/codec.h"
-#include "envoy/redis/conn_pool.h"
+#include "envoy/redis/command_splitter.h"
+#include "envoy/upstream/cluster_manager.h"
 
 #include "common/buffer/buffer_impl.h"
 #include "common/json/json_loader.h"
@@ -10,7 +11,6 @@
 namespace Redis {
 
 // TODO(mattklein123): Stats
-// TODO(mattklein123): Actual multiplexing, command verification, and splitting
 
 /**
  * Configuration for the redis proxy filter.
@@ -33,8 +33,8 @@ class ProxyFilter : public Network::ReadFilter,
                     public DecoderCallbacks,
                     public Network::ConnectionCallbacks {
 public:
-  ProxyFilter(DecoderFactory& factory, EncoderPtr&& encoder, ConnPool::Instance& conn_pool)
-      : decoder_(factory.create(*this)), encoder_(std::move(encoder)), conn_pool_(conn_pool) {}
+  ProxyFilter(DecoderFactory& factory, EncoderPtr&& encoder, CommandSplitter::Instance& splitter)
+      : decoder_(factory.create(*this)), encoder_(std::move(encoder)), splitter_(splitter) {}
 
   ~ProxyFilter();
 
@@ -53,16 +53,15 @@ public:
   void onRespValue(RespValuePtr&& value) override;
 
 private:
-  struct PendingRequest : public ConnPool::ActiveRequestCallbacks {
+  struct PendingRequest : public CommandSplitter::ActiveRequestCallbacks {
     PendingRequest(ProxyFilter& parent) : parent_(parent) {}
 
-    // Redis::ConnPool::ActiveRequestCallbacks
+    // Redis::CommandSplitter::ActiveRequestCallbacks
     void onResponse(RespValuePtr&& value) override { parent_.onResponse(*this, std::move(value)); }
-    void onFailure() override { parent_.onFailure(*this); }
 
     ProxyFilter& parent_;
     RespValuePtr pending_response_;
-    ConnPool::ActiveRequest* request_handle_;
+    CommandSplitter::ActiveRequestPtr request_handle_;
   };
 
   void onResponse(PendingRequest& request, RespValuePtr&& value);
@@ -71,7 +70,7 @@ private:
 
   DecoderPtr decoder_;
   EncoderPtr encoder_;
-  ConnPool::Instance& conn_pool_;
+  CommandSplitter::Instance& splitter_;
   Buffer::OwnedImpl encoder_buffer_;
   Network::ReadFilterCallbacks* callbacks_{};
   std::list<PendingRequest> pending_requests_;

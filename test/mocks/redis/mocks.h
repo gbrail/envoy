@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/redis/command_splitter.h"
 #include "envoy/redis/conn_pool.h"
 
 #include "common/redis/codec_impl.h"
@@ -77,4 +78,30 @@ public:
 };
 
 } // ConnPool
+
+namespace CommandSplitter {
+
+class MockActiveRequest : public ActiveRequest {
+public:
+  MockActiveRequest();
+  ~MockActiveRequest();
+
+  MOCK_METHOD0(cancel, void());
+};
+
+class MockInstance : public Instance {
+public:
+  MockInstance();
+  ~MockInstance();
+
+  ActiveRequestPtr makeRequest(const RespValue& request,
+                               ActiveRequestCallbacks& callbacks) override {
+    return ActiveRequestPtr{makeRequest_(request, callbacks)};
+  }
+
+  MOCK_METHOD2(makeRequest_,
+               ActiveRequest*(const RespValue& request, ActiveRequestCallbacks& callbacks));
+};
+
+} // CommandSplitter
 } // Redis

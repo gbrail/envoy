@@ -75,4 +75,14 @@ MockInstance::MockInstance() {}
 MockInstance::~MockInstance() {}
 
 } // ConnPool
+
+namespace CommandSplitter {
+
+MockActiveRequest::MockActiveRequest() {}
+MockActiveRequest::~MockActiveRequest() {}
+
+MockInstance::MockInstance() {}
+MockInstance::~MockInstance() {}
+
+} // CommandSplitter
 } // Redis
