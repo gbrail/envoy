@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package envoy.service.mutation.v3;
+
+import "envoy/config/core/v3/base.proto";
+import "envoy/type/v3/http_status.proto";
+
+import "google/protobuf/struct.proto";
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.service.mutation.v3";
+option java_outer_classname = "MutationProto";
+option java_multiple_files = true;
+option java_generic_services = true;
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// A service that can mutate HTTP requests and responses.
+service Mutation {
+  // Envoy will call this when it receives the request headers, and it will
+  // immediately send a Request message on the stream. The rest of the
+  // processing depends on the response stream. A processor that has
+  // nothing do to may merely close the stream without error.
+  rpc MutateRequest(stream RequestMutation) returns (stream MutationResponse) {
+  }
+
+  // Envoy will call this when it receives the response headers and immediately send
+  // a Response message on the stream.
+  rpc MutateResponse(stream ResponseMutation) returns (stream MutationResponse) {
+  }
+}
+
+// This stream is sent with the MutateRequest RPC
+message RequestMutation {
+  oneof r {
+    // The original request from the client
+    Request request = 1;
+
+    // This contains the entire HTTP request body, and is only sent if
+    // requested using the BodyRequest message
+    Body body = 2;
+  }
+}
+
+message ResponseMutation {
+  oneof r {
+    // The original response
+    Response response = 1;
+
+    // The entire HTTP response body if a BodyRequest was received
+    Body body = 2;
+
+    // The HTTP trailers, if they were requested
+    config.core.v3.HeaderMap trailers = 3;
+  }
+}
+
+// The mutation server may respond with zero or more of these responses
+// before closing the stream.
+// [#next-free-field: 8]
+message MutationResponse {
+  oneof r {
+    // Replace the entire HTTP response (whether on the request or on the
+    // response path) with the contents of the CompleteResponse message.
+    // If stop_filter_processing is set, then all filter processing
+    // will be ended.
+    CompleteResponse complete_response = 1;
+
+    // Request that Envoy send a Body message on the stream that contains
+    // some or all of the message body, as requested.
+    BodyRequest body_request = 2;
+
+    // Request that envoy wait for the HTTP trailers and send them too
+    TrailerRequest trailer_request = 3;
+
+    // Add, replace, or remove a single HTTP header
+    HeaderMutation header_mutation = 4;
+
+    // Replace some or all of the message body with a new set of bytes
+    BodyMutation body_mutation = 5;
+
+    // Add, replace, or remove a single HTTP trailer
+    HeaderMutation trailer_mutation = 6;
+
+    // Add new metadata to the Envoy context
+    google.protobuf.Struct new_metadata = 7;
+  }
+}
+
+// [#next-free-field: 7]
+message Request {
+  // A unique ID of the HTTP request and response
+  string id = 1;
+
+  // The HTTP method
+  string method = 2;
+
+  // A list of all the HTTP and other headers. As everything in Envoy
+  // names are all lower-cased.
+  config.core.v3.HeaderMap headers = 3;
+
+  // The URI path, including the query string
+  string path = 4;
+
+  // The HTTP scheme, either "http" or "https"
+  string scheme = 5;
+
+  // If the filter was configured to send metadata,
+  // then it's set here.
+  google.protobuf.Struct metadata = 6;
+}
+
+message Response {
+  // A unique ID that will match the one sent in the "Request" RPC
+  string id = 1;
+
+  // The HTTP status on the response
+  int32 status_code = 2;
+
+  // The HTTP headers
+  config.core.v3.HeaderMap headers = 3;
+
+  // If the filter was configured to send metadata,
+  // then it's set here.
+  google.protobuf.Struct metadata = 4;
+}
+
+// This message contains the message body that Envoy sends to the mutation service
+message Body {
+  bytes body = 1;
+}
+
+// This message completely replaces the request or response.
+// If stop_filter_processing is set, then short-circuit the
+// rest of the filter processing, and if on the request path,
+// return this response directly back to the client.
+//
+// Otherwise, replace everything
+// and let other filters run as they would like.
+// [#next-free-field: 6]
+message CompleteResponse {
+  type.v3.HttpStatus status = 1 [(validate.rules).message = {required: true}];
+
+  repeated config.core.v3.HeaderValueOption headers = 2;
+
+  bytes body = 3;
+
+  repeated config.core.v3.HeaderValueOption trailers = 4;
+
+  bool stop_filter_processing = 5;
+}
+
+// The mutation service can send this to request the message body
+// from Envoy -- the body is not transmitted by default.
+message BodyRequest {
+  // If nonzero, then return up to the number of bytes specified.
+  // It is an error, however, to request more bytes than the currently-configured
+  // Envoy buffer limit. If zero, return the entire message body.
+  int32 max_bytes = 1;
+
+  // If true, and the actual message body is larger than max_bytes, send
+  // it to the mutation service. This makes it possible to inspect only
+  // the first part of a message.
+  //
+  // If false, and the actual message body is larger than max_bytes, then
+  // an error is returned to the client.
+  bool allow_partial = 2;
+}
+
+// Request that Envoy wait for the HTTP trailers and then send them.
+message TrailerRequest {
+}
+
+// Change a single HTTP header. Note that Envoy always handles
+// HTTP headers in a case-insensitive way.
+message HeaderMutation {
+  oneof m {
+    // Either add or replace a header, depending on the parameters
+    config.core.v3.HeaderValueOption set_header = 1;
+
+    // Remove the header
+    string remove_header = 2;
+  }
+}
+
+// Change all or part of the message body by replacing the portion
+// of the original body denoted by offset and length with "body."
+// (The intention here is to do what the WASM API does and allow
+// the service to prepend, append, replace the middle, or replace
+// the whole body, and to use the same parameters that it uses.)
+message BodyMutation {
+  int32 offset = 1;
+
+  int32 length = 2;
+
+  bytes body = 3;
+}
