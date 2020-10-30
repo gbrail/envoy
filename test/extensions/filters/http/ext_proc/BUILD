@@ -12,6 +12,18 @@ licenses(["notice"])  # Apache 2
 envoy_package()
 
 envoy_extension_cc_test(
+    name = "client_test",
+    srcs = ["client_test.cc"],
+    extension_name = "envoy.filters.http.ext_proc",
+    deps = [
+        "//source/extensions/filters/http/ext_proc:client_impl",
+        "//source/extensions/filters/http/ext_proc:client_interface",
+        "//test/mocks/server:factory_context_mocks",
+        "//test/test_common:test_runtime_lib",
+    ],
+)
+
+envoy_extension_cc_test(
     name = "config_test",
     srcs = ["config_test.cc"],
     extension_name = "envoy.filters.http.ext_proc",
