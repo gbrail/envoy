@@ -5,6 +5,7 @@ load(
 load(
     "//test/extensions:extensions_build_system.bzl",
     "envoy_extension_cc_test",
+    "envoy_extension_cc_test_library",
 )
 
 licenses(["notice"])  # Apache 2
@@ -16,6 +17,7 @@ envoy_extension_cc_test(
     srcs = ["client_test.cc"],
     extension_name = "envoy.filters.http.ext_proc",
     deps = [
+        ":client_mocks",
         "//source/extensions/filters/http/ext_proc:client_impl",
         "//source/extensions/filters/http/ext_proc:client_interface",
         "//test/mocks/server:factory_context_mocks",
@@ -39,8 +41,20 @@ envoy_extension_cc_test(
     srcs = ["filter_test.cc"],
     extension_name = "envoy.filters.http.ext_proc",
     deps = [
+        ":client_mocks",
         "//source/extensions/filters/http/ext_proc",
         "//test/mocks/server:factory_context_mocks",
+        "//test/test_common:test_runtime_lib",
+    ],
+)
+
+envoy_extension_cc_test_library(
+    name = "client_mocks",
+    extension_name = "envoy.filters.http.ext_proc",
+    hdrs = ["client_mocks.h"],
+    srcs = ["client_mocks.cc"],
+    deps = [
+        "//source/extensions/filters/http/ext_proc:client_interface",
         "//test/test_common:test_runtime_lib",
     ],
 )

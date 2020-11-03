@@ -5,6 +5,7 @@
 #include "envoy/extensions/filters/http/ext_proc/v3alpha/ext_proc.pb.h"
 #include "envoy/grpc/async_client.h"
 #include "envoy/http/filter.h"
+#include "envoy/http/header_map.h"
 
 #include "common/common/logger.h"
 
@@ -29,12 +30,22 @@ private:
 
 using FilterConfigSharedPtr = std::shared_ptr<FilterConfig>;
 
+enum FilterState {
+  Idle = 0,
+  RequestHeaders,
+  RequestBody,
+  RequestTrailers,
+  ResponseHeaders,
+  ResponseBody,
+  ResponseTrailers,
+};
+
 class Filter : public Logger::Loggable<Logger::Id::filter>,
                public Http::PassThroughFilter,
                public ExternalProcessorCallbacks {
 public:
   Filter(const FilterConfigSharedPtr& config, std::unique_ptr<ExternalProcessorClient>&& client);
-  virtual ~Filter() = default;
+  ~Filter() override = default;
 
   // StreamFilter callbacks
   void onDestroy() override;
@@ -51,10 +62,17 @@ public:
   void onGrpcClose() override;
 
 private:
+  void handleHeaderMutation(const envoy::service::ext_proc::v3alpha::HeaderMutation& mutation,
+    Http::HeaderMap* map);
+
   FilterConfigSharedPtr config_;
   std::unique_ptr<ExternalProcessorClient> client_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_;
+
   std::unique_ptr<ExternalProcessorStream> stream_;
+
+  FilterState state_ = FilterState::Idle;
+  Http::HeaderMap* saved_headers_ = nullptr;
 };
 
 } // namespace ExternalProcessing

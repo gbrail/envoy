@@ -5,6 +5,7 @@
 
 #include "extensions/filters/http/ext_proc/client_impl.h"
 
+#include "test/extensions/filters/http/ext_proc/client_mocks.h"
 #include "test/mocks/grpc/mocks.h"
 #include "test/mocks/stats/mocks.h"
 #include "test/mocks/upstream/cluster_manager.h"
@@ -17,7 +18,6 @@ using testing::ByMove;
 using testing::Invoke;
 using testing::Return;
 using testing::ReturnRef;
-using testing::SaveArg;
 
 using envoy::service::ext_proc::v3alpha::ProcessingRequest;
 using envoy::service::ext_proc::v3alpha::ProcessingResponse;
@@ -28,16 +28,9 @@ namespace HttpFilters {
 namespace ExternalProcessing {
 namespace {
 
-class MockCallbacks : public ExternalProcessorCallbacks {
-public:
-  MOCK_METHOD(void, onReceiveMessage, (std::unique_ptr<ProcessingResponse> && message));
-  MOCK_METHOD(void, onGrpcError, (Grpc::Status::GrpcStatus error));
-  MOCK_METHOD(void, onGrpcClose, ());
-};
-
 class ExternalProcessorClientTest : public testing::Test {
 protected:
-  void SetUp() {
+  void SetUp() override {
     // Set up the environment to create a single mock gRPC bidirectional stream.
     scope_ = stats_store.createScope("testscope");
     EXPECT_CALL(cluster_manager, grpcAsyncClientManager())
@@ -59,7 +52,7 @@ protected:
     client_ = std::make_unique<ExternalProcessorClientImpl>(cluster_manager, grpc_service, *scope_);
   }
 
-  void TearDown() {
+  void TearDown() override {
     // TODO the fact that I have to do this worries me -- why isn't this
     // freed when the client is freed?
     delete async_stream;
