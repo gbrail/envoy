@@ -11,11 +11,13 @@ namespace ExternalProcessing {
 
 using envoy::extensions::filters::http::ext_proc::v3alpha::ProcessingMode;
 
+using envoy::service::ext_proc::v3alpha::BodyResponse;
 using envoy::service::ext_proc::v3alpha::HeadersResponse;
 using envoy::service::ext_proc::v3alpha::ImmediateResponse;
 using envoy::service::ext_proc::v3alpha::ProcessingRequest;
 using envoy::service::ext_proc::v3alpha::ProcessingResponse;
 
+using Http::FilterDataStatus;
 using Http::FilterHeadersStatus;
 using Http::RequestHeaderMap;
 using Http::ResponseHeaderMap;
@@ -49,6 +51,7 @@ FilterHeadersStatus Filter::decodeHeaders(RequestHeaderMap& headers, bool end_of
   }
 
   // We're at the start, so start the stream and send a headers message
+  ENVOY_BUG(request_state_ == FilterState::IDLE, "Filter request state should be idle");
   openStream();
   request_headers_ = &headers;
   ProcessingRequest req;
@@ -64,12 +67,46 @@ FilterHeadersStatus Filter::decodeHeaders(RequestHeaderMap& headers, bool end_of
   return FilterHeadersStatus::StopAllIterationAndWatermark;
 }
 
+FilterDataStatus Filter::decodeData(Buffer::Instance& data, bool end_stream) {
+  if (processing_complete_) {
+    return FilterDataStatus::Continue;
+  }
+
+  switch (processing_mode_.request_body_mode()) {
+  case ProcessingMode::BUFFERED:
+  case ProcessingMode::BUFFERED_PARTIAL:
+    ENVOY_LOG(warn, "Ignoring unimplemented request body processing mode BUFFERED");
+    return FilterDataStatus::Continue;
+  case ProcessingMode::STREAMED:
+    return decodeDataStreamed(data, end_stream);
+  case ProcessingMode::NONE:
+  default:
+    return FilterDataStatus::Continue;
+  }
+}
+
+FilterDataStatus Filter::decodeDataStreamed(Buffer::Instance& data, bool end_stream) {
+  ENVOY_BUG(request_state_ == FilterState::IDLE, "Filter request state should be idle");
+  openStream();
+  request_body_chunk_ = &data;
+  ProcessingRequest req;
+  auto* body_req = req.mutable_request_body();
+  body_req->set_end_of_stream(end_stream);
+  body_req->set_body(data.toString());
+  request_state_ = FilterState::BODY;
+  ENVOY_LOG(debug, "Sending request_body message");
+  stream_->send(std::move(req), false);
+  stats_.stream_msgs_sent_.inc();
+  return FilterDataStatus::StopIterationAndWatermark;
+}
+
 FilterHeadersStatus Filter::encodeHeaders(ResponseHeaderMap& headers, bool end_of_stream) {
   if (processing_complete_ || processing_mode_.response_header_mode() == ProcessingMode::SKIP) {
     return FilterHeadersStatus::Continue;
   }
 
   // Depending on processing mode this may or may not be the first message
+  ENVOY_BUG(response_state_ == FilterState::IDLE, "Filter response state should be idle");
   openStream();
   response_headers_ = &headers;
   ProcessingRequest req;
@@ -83,19 +120,64 @@ FilterHeadersStatus Filter::encodeHeaders(ResponseHeaderMap& headers, bool end_o
   return FilterHeadersStatus::StopAllIterationAndWatermark;
 }
 
-void Filter::onReceiveMessage(
-    std::unique_ptr<envoy::service::ext_proc::v3alpha::ProcessingResponse>&& r) {
+FilterDataStatus Filter::encodeData(Buffer::Instance& data, bool end_stream) {
+  if (processing_complete_) {
+    return FilterDataStatus::Continue;
+  }
+
+  switch (processing_mode_.response_body_mode()) {
+  case ProcessingMode::BUFFERED:
+  case ProcessingMode::BUFFERED_PARTIAL:
+    ENVOY_LOG(warn, "Ignoring unimplemented response body processing mode BUFFERED");
+    return FilterDataStatus::Continue;
+  case ProcessingMode::STREAMED:
+    return encodeDataStreamed(data, end_stream);
+  case ProcessingMode::NONE:
+  default:
+    return FilterDataStatus::Continue;
+  }
+}
+
+FilterDataStatus Filter::encodeDataStreamed(Buffer::Instance& data, bool end_stream) {
+  ENVOY_BUG(response_state_ == FilterState::IDLE, "Filter response state should be idle");
+  openStream();
+  response_body_chunk_ = &data;
+  ProcessingRequest req;
+  auto* body_req = req.mutable_response_body();
+  body_req->set_end_of_stream(end_stream);
+  body_req->set_body(data.toString());
+  response_state_ = FilterState::BODY;
+  ENVOY_LOG(debug, "Sending response_body message. end_stream = {}", end_stream);
+  stream_->send(std::move(req), false);
+  stats_.stream_msgs_sent_.inc();
+  return FilterDataStatus::StopIterationAndWatermark;
+}
+
+void Filter::onReceiveMessage(std::unique_ptr<ProcessingResponse>&& r) {
   auto response = std::move(r);
   bool message_handled = false;
   ENVOY_LOG(debug, "Received gRPC message. State = {}", request_state_);
 
-  if (response->has_request_headers()) {
+  switch (response->response_case()) {
+  case ProcessingResponse::ResponseCase::kRequestHeaders:
     message_handled = handleRequestHeadersResponse(response->request_headers());
-  } else if (response->has_response_headers()) {
+    break;
+  case ProcessingResponse::ResponseCase::kResponseHeaders:
     message_handled = handleResponseHeadersResponse(response->response_headers());
-  } else if (response->has_immediate_response()) {
+    break;
+  case ProcessingResponse::ResponseCase::kRequestBody:
+    message_handled = handleRequestBodyResponse(response->request_body());
+    break;
+  case ProcessingResponse::ResponseCase::kResponseBody:
+    message_handled = handleResponseBodyResponse(response->response_body());
+    break;
+  case ProcessingResponse::ResponseCase::kImmediateResponse:
     handleImmediateResponse(response->immediate_response());
     message_handled = true;
+    break;
+  default:
+    // Any other message is considered spurious
+    break;
   }
 
   if (message_handled) {
@@ -136,9 +218,31 @@ bool Filter::handleResponseHeadersResponse(const HeadersResponse& response) {
   return false;
 }
 
+bool Filter::handleRequestBodyResponse(const BodyResponse& response) {
+  if (request_state_ == FilterState::BODY) {
+    ENVOY_LOG(debug, "Applying request_body response");
+    MutationUtils::applyCommonBodyResponse(response, *request_body_chunk_);
+    request_state_ = FilterState::IDLE;
+    decoder_callbacks_->continueDecoding();
+    return true;
+  }
+  return false;
+}
+
+bool Filter::handleResponseBodyResponse(const BodyResponse& response) {
+  if (response_state_ == FilterState::BODY) {
+    ENVOY_LOG(debug, "Applying response_body response");
+    MutationUtils::applyCommonBodyResponse(response, *response_body_chunk_);
+    response_state_ = FilterState::IDLE;
+    encoder_callbacks_->continueEncoding();
+    return true;
+  }
+  return false;
+}
+
 void Filter::handleImmediateResponse(const ImmediateResponse& response) {
   // We don't want to process any more stream messages after this.
-  // Close the stream before sending because "sendLocalResponse" triggers
+  // Close the stream before sending because "sendLocalResponse" may trigger
   // additional calls to this filter.
   request_state_ = FilterState::IDLE;
   response_state_ = FilterState::IDLE;

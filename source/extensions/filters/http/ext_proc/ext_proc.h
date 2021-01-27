@@ -81,6 +81,9 @@ class Filter : public Logger::Loggable<Logger::Id::filter>,
     // The filter is waiting for a "request_headers" or a "response_headers" message.
     // Any other response on the gRPC stream will be treated as spurious.
     HEADERS,
+    // The filter is waiting for a "request_body" or a "response_body" message.
+    // Any other response on the stream will be treated as spurious.
+    BODY,
   };
 
 public:
@@ -92,8 +95,11 @@ public:
 
   Http::FilterHeadersStatus decodeHeaders(Http::RequestHeaderMap& headers,
                                           bool end_stream) override;
+  Http::FilterDataStatus decodeData(Buffer::Instance& data, bool end_stream) override;
+
   Http::FilterHeadersStatus encodeHeaders(Http::ResponseHeaderMap& headers,
                                           bool end_stream) override;
+  Http::FilterDataStatus encodeData(Buffer::Instance& data, bool end_stream) override;
 
   // ExternalProcessorCallbacks
 
@@ -114,8 +120,13 @@ private:
   handleRequestHeadersResponse(const envoy::service::ext_proc::v3alpha::HeadersResponse& response);
   bool
   handleResponseHeadersResponse(const envoy::service::ext_proc::v3alpha::HeadersResponse& response);
+  bool handleRequestBodyResponse(const envoy::service::ext_proc::v3alpha::BodyResponse& response);
+  bool handleResponseBodyResponse(const envoy::service::ext_proc::v3alpha::BodyResponse& response);
   void
   handleImmediateResponse(const envoy::service::ext_proc::v3alpha::ImmediateResponse& response);
+
+  Http::FilterDataStatus decodeDataStreamed(Buffer::Instance& data, bool end_stream);
+  Http::FilterDataStatus encodeDataStreamed(Buffer::Instance& data, bool end_stream);
 
   const FilterConfigSharedPtr config_;
   const ExternalProcessorClientPtr client_;
@@ -140,7 +151,9 @@ private:
   bool processing_complete_ = false;
 
   Http::HeaderMap* request_headers_ = nullptr;
+  Buffer::Instance* request_body_chunk_ = nullptr;
   Http::HeaderMap* response_headers_ = nullptr;
+  Buffer::Instance* response_body_chunk_ = nullptr;
 
   // The processing mode. May be locally overridden by any response,
   // So every instance of the filter has a copy.
