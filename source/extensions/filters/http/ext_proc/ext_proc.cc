@@ -46,7 +46,9 @@ void Filter::closeStream() {
 void Filter::onDestroy() { closeStream(); }
 
 FilterHeadersStatus Filter::decodeHeaders(RequestHeaderMap& headers, bool end_of_stream) {
+  ENVOY_LOG(trace, "decodeHeaders");
   if (processing_mode_.request_header_mode() == ProcessingMode::SKIP) {
+    ENVOY_LOG(trace, "decodeHeaders: Continue");
     return FilterHeadersStatus::Continue;
   }
 
@@ -64,11 +66,14 @@ FilterHeadersStatus Filter::decodeHeaders(RequestHeaderMap& headers, bool end_of
   stats_.stream_msgs_sent_.inc();
 
   // Wait until we have a gRPC response before allowing any more callbacks
+  ENVOY_LOG(trace, "decodeHeaders: watermark");
   return FilterHeadersStatus::StopAllIterationAndWatermark;
 }
 
 FilterDataStatus Filter::decodeData(Buffer::Instance& data, bool end_stream) {
+  ENVOY_LOG(trace, "decodeData");
   if (processing_complete_) {
+    ENVOY_LOG(trace, "decodeData: continue");
     return FilterDataStatus::Continue;
   }
 
@@ -81,6 +86,7 @@ FilterDataStatus Filter::decodeData(Buffer::Instance& data, bool end_stream) {
     return decodeDataStreamed(data, end_stream);
   case ProcessingMode::NONE:
   default:
+    ENVOY_LOG(trace, "decodeData: continue");
     return FilterDataStatus::Continue;
   }
 }
@@ -97,11 +103,15 @@ FilterDataStatus Filter::decodeDataStreamed(Buffer::Instance& data, bool end_str
   ENVOY_LOG(debug, "Sending request_body message");
   stream_->send(std::move(req), false);
   stats_.stream_msgs_sent_.inc();
+
+  ENVOY_LOG(trace, "decodeDataStreamed: watermark");
   return FilterDataStatus::StopIterationAndWatermark;
 }
 
 FilterHeadersStatus Filter::encodeHeaders(ResponseHeaderMap& headers, bool end_of_stream) {
+  ENVOY_LOG(trace, "encodeHeaders");
   if (processing_complete_ || processing_mode_.response_header_mode() == ProcessingMode::SKIP) {
+    ENVOY_LOG(trace, "encodeHeaders: continue");
     return FilterHeadersStatus::Continue;
   }
 
@@ -117,11 +127,15 @@ FilterHeadersStatus Filter::encodeHeaders(ResponseHeaderMap& headers, bool end_o
   ENVOY_LOG(debug, "Sending response_headers message");
   stream_->send(std::move(req), false);
   stats_.stream_msgs_sent_.inc();
+
+  ENVOY_LOG(trace, "encodeHeaders: watermark");
   return FilterHeadersStatus::StopAllIterationAndWatermark;
 }
 
 FilterDataStatus Filter::encodeData(Buffer::Instance& data, bool end_stream) {
+  ENVOY_LOG(trace, "encodeData");
   if (processing_complete_) {
+    ENVOY_LOG(trace, "encodeData: continue");
     return FilterDataStatus::Continue;
   }
 
@@ -134,6 +148,7 @@ FilterDataStatus Filter::encodeData(Buffer::Instance& data, bool end_stream) {
     return encodeDataStreamed(data, end_stream);
   case ProcessingMode::NONE:
   default:
+    ENVOY_LOG(trace, "encodeData: continue");
     return FilterDataStatus::Continue;
   }
 }
@@ -150,6 +165,8 @@ FilterDataStatus Filter::encodeDataStreamed(Buffer::Instance& data, bool end_str
   ENVOY_LOG(debug, "Sending response_body message. end_stream = {}", end_stream);
   stream_->send(std::move(req), false);
   stats_.stream_msgs_sent_.inc();
+
+  ENVOY_LOG(trace, "encodeDataStreamed: watermark");
   return FilterDataStatus::StopIterationAndWatermark;
 }
 
@@ -157,6 +174,11 @@ void Filter::onReceiveMessage(std::unique_ptr<ProcessingResponse>&& r) {
   auto response = std::move(r);
   bool message_handled = false;
   ENVOY_LOG(debug, "Received gRPC message. State = {}", request_state_);
+
+  if (response->has_mode_override()) {
+    ENVOY_LOG(debug, "Processing mode overridden by server for this request");
+    processing_mode_ = response->mode_override();
+  }
 
   switch (response->response_case()) {
   case ProcessingResponse::ResponseCase::kRequestHeaders:
@@ -181,10 +203,6 @@ void Filter::onReceiveMessage(std::unique_ptr<ProcessingResponse>&& r) {
   }
 
   if (message_handled) {
-    if (response->has_mode_override()) {
-      ENVOY_LOG(debug, "Processing mode overridden by server for this request");
-      processing_mode_ = response->mode_override();
-    }
     stats_.stream_msgs_received_.inc();
   } else {
     stats_.spurious_msgs_received_.inc();

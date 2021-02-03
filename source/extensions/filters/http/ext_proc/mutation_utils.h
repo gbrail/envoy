@@ -9,7 +9,7 @@ namespace Extensions {
 namespace HttpFilters {
 namespace ExternalProcessing {
 
-class MutationUtils {
+class MutationUtils : public Logger::Loggable<Logger::Id::filter> {
 public:
   // Convert a header map until a protobuf
   static void buildHttpHeaders(const Http::HeaderMap& headers_in,
